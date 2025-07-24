@@ -24,6 +24,20 @@ type result struct {
 	Err      error
 }
 
+type report struct {
+	URL            string
+	TotalRequests  int
+	Concurrency    int
+	TotalTime      time.Duration
+	RequestsPerSec float64
+	HTTP200        int
+	StatusDist     map[int]int
+	Errors         int
+	StartTime      time.Time
+	EndTime        time.Time
+	LatencySamples []time.Duration
+}
+
 func main() {
 	flag.StringVar(&url, "url", "", "URL do serviço *")
 	flag.IntVar(&total, "requests", 1, "Total de requisições")
@@ -111,6 +125,26 @@ func main() {
 		fmt.Printf("Status: %d | Duração: %s | Erro: %v\n", r.Status, r.Duration, r.Err)
 	}
 
+	rep := buildReport(url, total, concurrency, startTime, results)
+
+	fmt.Println("--- Relatório de Teste de Carga ---")
+	fmt.Printf("URL:            %s\n", rep.URL)
+	fmt.Printf("Total:          %d\n", rep.TotalRequests)
+	fmt.Printf("Concorrência:   %d\n", rep.Concurrency)
+	fmt.Printf("Tempo Total:    %s\n", rep.TotalTime)
+	fmt.Printf("RPS:            %.2f\n", rep.RequestsPerSec)
+	fmt.Printf("HTTP 200:       %d\n", rep.HTTP200)
+	fmt.Printf("Erros:          %d\n", rep.Errors)
+	fmt.Println("Status HTTP:")
+	for k, v := range rep.StatusDist {
+		fmt.Printf("  %d: %d\n", k, v)
+	}
+	fmt.Printf("Início: %s\nFim:    %s\n", rep.StartTime.Format(time.RFC3339), rep.EndTime.Format(time.RFC3339))
+
+}
+
+func buildReport(url string, total, concurrency int, startTime time.Time, results <-chan result) report {
+	statusDist := make(map[int]int)
 	var http200, errs int
 	var durations []time.Duration
 
@@ -119,6 +153,7 @@ func main() {
 			errs++
 			continue
 		}
+		statusDist[r.Status]++
 		if r.Status == 200 {
 			http200++
 		}
@@ -128,9 +163,17 @@ func main() {
 	endTime := time.Now()
 	totalTime := endTime.Sub(startTime)
 
-	fmt.Printf("\nRelatório Final:\n")
-	fmt.Printf("Total de requisições: %d\n", total)
-	fmt.Printf("Requisições com status 200: %d\n", http200)
-	fmt.Printf("Erros: %d\n", errs)
-	fmt.Printf("Tempo total: %s\n", totalTime)
+	return report{
+		URL:            url,
+		TotalRequests:  total,
+		Concurrency:    concurrency,
+		TotalTime:      totalTime,
+		RequestsPerSec: float64(total) / totalTime.Seconds(),
+		HTTP200:        http200,
+		StatusDist:     statusDist,
+		Errors:         errs,
+		StartTime:      startTime,
+		EndTime:        endTime,
+		LatencySamples: durations,
+	}
 }
