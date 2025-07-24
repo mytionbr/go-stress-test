@@ -103,6 +103,8 @@ func main() {
 	wg.Wait()
 	close(results)
 
+	fmt.Println("Resultados:")
+
 	for r := range results {
 		fmt.Printf("Status: %d | Duração: %s | Erro: %v\n", r.Status, r.Duration, r.Err)
 	}
