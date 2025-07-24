@@ -3,6 +3,10 @@ package main
 import (
 	"flag"
 	"fmt"
+	"io"
+	"net/http"
+	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -13,6 +17,12 @@ var (
 	timeout     time.Duration
 	outputJson  bool
 )
+
+type result struct {
+	Status   int
+	Duration time.Duration
+	Err      error
+}
 
 func main() {
 	flag.StringVar(&url, "url", "", "URL do serviço *")
@@ -46,5 +56,54 @@ func main() {
 
 	if concurrency > total {
 		concurrency = total
+	}
+
+	client := &http.Client{
+		Timeout: timeout,
+		Transport: &http.Transport{
+			MaxIdleConnsPerHost: concurrency,
+		},
+	}
+
+	jobs := make(chan int, total)
+	results := make(chan result, total)
+
+	var wg sync.WaitGroup
+	var started int32
+
+	worker := func() {
+		defer wg.Done()
+		for range jobs {
+			start := time.Now()
+			resp, err := client.Get(url)
+			d := time.Since(start)
+
+			if err != nil {
+				results <- result{Status: 0, Duration: d, Err: err}
+				continue
+			}
+			io.Copy(io.Discard, resp.Body)
+			resp.Body.Close()
+
+			results <- result{Status: resp.StatusCode, Duration: d}
+		}
+	}
+
+	wg.Add(concurrency)
+	for i := 0; i < concurrency; i++ {
+		go worker()
+	}
+
+	for i := 0; i < total; i++ {
+		atomic.AddInt32(&started, 1)
+		jobs <- i
+	}
+	close(jobs)
+
+	wg.Wait()
+	close(results)
+
+	for r := range results {
+		fmt.Printf("Status: %d | Duração: %s | Erro: %v\n", r.Status, r.Duration, r.Err)
 	}
 }
