@@ -89,6 +89,8 @@ func main() {
 		}
 	}
 
+	startTime := time.Now()
+
 	wg.Add(concurrency)
 	for i := 0; i < concurrency; i++ {
 		go worker()
@@ -108,4 +110,27 @@ func main() {
 	for r := range results {
 		fmt.Printf("Status: %d | Duração: %s | Erro: %v\n", r.Status, r.Duration, r.Err)
 	}
+
+	var http200, errs int
+	var durations []time.Duration
+
+	for r := range results {
+		if r.Err != nil {
+			errs++
+			continue
+		}
+		if r.Status == 200 {
+			http200++
+		}
+		durations = append(durations, r.Duration)
+	}
+
+	endTime := time.Now()
+	totalTime := endTime.Sub(startTime)
+
+	fmt.Printf("\nRelatório Final:\n")
+	fmt.Printf("Total de requisições: %d\n", total)
+	fmt.Printf("Requisições com status 200: %d\n", http200)
+	fmt.Printf("Erros: %d\n", errs)
+	fmt.Printf("Tempo total: %s\n", totalTime)
 }
