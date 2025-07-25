@@ -1,10 +1,13 @@
 package main
 
 import (
+	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
 	"net/http"
+	"os"
+	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -35,6 +38,10 @@ type report struct {
 	Errors         int
 	StartTime      time.Time
 	EndTime        time.Time
+	AvgLatencyMS   float64
+	MinLatencyMS   float64
+	P95LatencyMS   float64
+	MaxLatencyMS   float64
 	LatencySamples []time.Duration
 }
 
@@ -119,28 +126,19 @@ func main() {
 	wg.Wait()
 	close(results)
 
-	fmt.Println("Resultados:")
-
-	for r := range results {
-		fmt.Printf("Status: %d | Duração: %s | Erro: %v\n", r.Status, r.Duration, r.Err)
-	}
-
 	rep := buildReport(url, total, concurrency, startTime, results)
 
-	fmt.Println("--- Relatório de Teste de Carga ---")
-	fmt.Printf("URL:            %s\n", rep.URL)
-	fmt.Printf("Total:          %d\n", rep.TotalRequests)
-	fmt.Printf("Concorrência:   %d\n", rep.Concurrency)
-	fmt.Printf("Tempo Total:    %s\n", rep.TotalTime)
-	fmt.Printf("RPS:            %.2f\n", rep.RequestsPerSec)
-	fmt.Printf("HTTP 200:       %d\n", rep.HTTP200)
-	fmt.Printf("Erros:          %d\n", rep.Errors)
-	fmt.Println("Status HTTP:")
-	for k, v := range rep.StatusDist {
-		fmt.Printf("  %d: %d\n", k, v)
+	if outputJson {
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+		if err := enc.Encode(rep); err != nil {
+			fmt.Fprintln(os.Stderr, "erro ao gerar JSON:", err)
+			os.Exit(1)
+		}
+		return
 	}
-	fmt.Printf("Início: %s\nFim:    %s\n", rep.StartTime.Format(time.RFC3339), rep.EndTime.Format(time.RFC3339))
 
+	printReport(rep)
 }
 
 func buildReport(url string, total, concurrency int, startTime time.Time, results <-chan result) report {
@@ -163,6 +161,8 @@ func buildReport(url string, total, concurrency int, startTime time.Time, result
 	endTime := time.Now()
 	totalTime := endTime.Sub(startTime)
 
+	avg, min, p95, max := latencyStats(durations)
+
 	return report{
 		URL:            url,
 		TotalRequests:  total,
@@ -172,8 +172,62 @@ func buildReport(url string, total, concurrency int, startTime time.Time, result
 		HTTP200:        http200,
 		StatusDist:     statusDist,
 		Errors:         errs,
+		AvgLatencyMS:   avg,
+		MinLatencyMS:   min,
+		P95LatencyMS:   p95,
+		MaxLatencyMS:   max,
 		StartTime:      startTime,
 		EndTime:        endTime,
 		LatencySamples: durations,
 	}
+}
+
+func latencyStats(durations []time.Duration) (avg, min, p95, max float64) {
+	if len(durations) == 0 {
+		return 0, 0, 0, 0
+	}
+	sort.Slice(durations, func(i, j int) bool { return durations[i] < durations[j] })
+
+	var sum time.Duration
+	minDur := durations[0]
+	maxDur := durations[len(durations)-1]
+	for _, d := range durations {
+		sum += d
+	}
+	avg = float64(sum.Milliseconds()) / float64(len(durations))
+	min = float64(minDur.Milliseconds())
+	max = float64(maxDur.Milliseconds())
+	idx := int(float64(len(durations))*0.95) - 1
+	if idx < 0 {
+		idx = 0
+	}
+	p95 = float64(durations[idx].Milliseconds())
+	return
+}
+
+func printReport(r report) {
+	fmt.Println("==== Relatório de Teste de Carga ====")
+	fmt.Printf("URL:                 %s\n", r.URL)
+	fmt.Printf("Requests Totais:     %d\n", r.TotalRequests)
+	fmt.Printf("Concorrência:        %d\n", r.Concurrency)
+	fmt.Printf("Tempo Total:         %s\n", r.TotalTime)
+	fmt.Printf("RPS (aprox):         %.2f req/s\n", r.RequestsPerSec)
+	fmt.Printf("HTTP 200:            %d\n", r.HTTP200)
+	fmt.Printf("Erros (timeout/etc): %d\n", r.Errors)
+	fmt.Println("\nDistribuição de Status HTTP:")
+	// ordenar chaves
+	keys := make([]int, 0, len(r.StatusDist))
+	for k := range r.StatusDist {
+		keys = append(keys, k)
+	}
+	sort.Ints(keys)
+	for _, k := range keys {
+		fmt.Printf("  %d: %d\n", k, r.StatusDist[k])
+	}
+	fmt.Println("\nLatências (ms):")
+	fmt.Printf("  Média:  %.2f\n", r.AvgLatencyMS)
+	fmt.Printf("  Mínima: %.2f\n", r.MinLatencyMS)
+	fmt.Printf("  P95:    %.2f\n", r.P95LatencyMS)
+	fmt.Printf("  Máxima: %.2f\n", r.MaxLatencyMS)
+	fmt.Printf("\nInício: %s\nFim:    %s\n", r.StartTime.Format(time.RFC3339), r.EndTime.Format(time.RFC3339))
 }
