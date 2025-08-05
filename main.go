@@ -100,7 +100,9 @@ func main() {
 			d := time.Since(start)
 
 			if err != nil {
+				fmt.Println("-----------------------------")
 				fmt.Println("Erro na requisição:", err)
+				fmt.Println("-----------------------------")
 				results <- result{Status: 0, Duration: d, Err: err}
 				continue
 			}
